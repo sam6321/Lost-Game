@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using Pathfinding;
+using System;
 using UnityEngine;
 
 public class BoardCreator : MonoBehaviour
@@ -12,43 +13,51 @@ public class BoardCreator : MonoBehaviour
         Floor
     }
 
-    private int North = 0;
-    private int South = 0;
-    private int East = 0;
-    private int West = 0;
+    private enum TileCountDirections
+    {
+        Adjacent,
+        Diagonal,
+        Both
+    }
 
+    private const int North = 0;
+    private const int South = 1;
+    private const int East = 2;
+    private const int West = 3;
+    private const int NorthWest = 4;
+    private const int NorthEast = 5;
+    private const int SouthWest = 6;
+    private const int SouthEast = 7;
 
-    public int columns = 100;                                 // The number of columns on the board (how wide it will be).
-    public int rows = 100;                                    // The number of rows on the board (how tall it will be).
-    public IntRange numRooms = new IntRange(15, 20);         // The range of the number of rooms there can be.
-    public IntRange roomWidth = new IntRange(3, 10);         // The range of widths rooms can have.
-    public IntRange roomHeight = new IntRange(3, 10);        // The range of heights rooms can have.
-    public IntRange corridorLength = new IntRange(6, 10);    // The range of lengths corridors between rooms can have.
-    public GameObject[] floorTiles;                           // An array of floor tile prefabs.
-    public GameObject[] wallTiles;                            // An array of wall tile prefabs.
-    public GameObject[] outerWallTiles;                       // An array of outer wall tile prefabs.
-    public GameObject player;
+    // The open part of wall1 tiles points south
+    // The open parts of wall2 2 tiles point west and south
+    // The open parts of wall2 tiles points north and south
+    // The open parts of wall3 point south, west, and east
+    // Wall 4s don't need to be rotated as they point in all directions
+
+   
+    [SerializeField]
+    private GameObject player;
 
     [SerializeField]
-    private GameObject[] outsideTiles;
+    private GameObject enemy;
+
     [SerializeField]
-    private GameObject[] wall0Tiles;
+    private AstarPath path;
+    
     [SerializeField]
-    private GameObject[] wall1Tiles;
+    private bool removeLooseWalls;
+
     [SerializeField]
-    private GameObject[] wall2Tiles;
+    private GenerationParams gParams;
+
     [SerializeField]
-    private GameObject[] wall2Tiles2;
-    [SerializeField]
-    private GameObject[] wall3Tiles;
-    [SerializeField]
-    private GameObject[] wall4Tiles;
+    private TilePrefabs tilePrefabs;
 
     private TileType[][] tiles;                               // A jagged array of tile types representing the board, like a grid.
     private Room[] rooms;                                     // All the rooms that are created for this board.
     private Corridor[] corridors;                             // All the corridors that connect the rooms.
     private GameObject boardHolder;                           // GameObject that acts as a container for all other tiles.
-
 
     private void Start()
     {
@@ -59,24 +68,78 @@ public class BoardCreator : MonoBehaviour
 
         CreateRoomsAndCorridors();
 
-        SetTilesValuesForRooms();
-        SetTilesValuesForCorridors();
+        SetTileValuesForFloors();
+        SetTileValuesForWalls();
+
+        if(removeLooseWalls)
+        {
+            RemoveLooseWalls();
+        }
 
         InstantiateTiles();
-        InstantiateOuterWalls();
+        ConfigureGraph();
+        SelectEnemySpawnRoom();
+    }
+
+    void SelectEnemySpawnRoom()
+    {
+        int index = UnityEngine.Random.Range(0, rooms.Length - 1);
+        Room room = rooms[index];
+        Vector2Int start = room.RoomStart;
+        Vector2Int size = room.RoomSize;
+        enemy.transform.position = new Vector2(start.x + size.x / 2.0f, start.y + size.y / 2.0f);
+
+        enemy.GetComponent<Seeker>().StartPath(enemy.transform.position, player.transform.position);
+    }
+
+    void ConfigureGraph()
+    {
+        int xMin = int.MaxValue;
+        int yMin = int.MaxValue;
+        int xMax = int.MinValue;
+        int yMax = int.MinValue;
+
+        for(int x = 0; x < gParams.columns; x++)
+        {
+            for (int y = 0; y < gParams.rows; y++)
+            {
+                if (tiles[x][y] != TileType.OutsideMap)
+                {
+                    xMin = Mathf.Min(xMin, x);
+                    yMin = Mathf.Min(yMin, y);
+                    xMax = Mathf.Max(xMax, x);
+                    yMax = Mathf.Max(yMax, y);
+                }
+            }
+        }
+
+        GridGraph graph = path.data.graphs[0] as GridGraph;
+        graph.center = new Vector2(
+            xMin + (xMax - xMin) / 2.0f,
+            yMin + (yMax - yMin) / 2.0f
+        );
+        graph.SetDimensions(xMax - xMin + 1, yMax - yMin + 1, 1.0f);
+        graph.collision.mask = LayerMask.GetMask("World");
+        path.Scan();
+
     }
 
 
     void SetupTilesArray()
     {
         // Set the tiles jagged array to the correct width.
-        tiles = new TileType[columns][];
+        tiles = new TileType[gParams.columns][];
 
         // Go through all the tile arrays...
         for (int i = 0; i < tiles.Length; i++)
         {
             // ... and set each tile array is the correct height.
-            tiles[i] = new TileType[rows];
+            tiles[i] = new TileType[gParams.rows];
+
+            for(int j = 0; j < tiles[i].Length; j++)
+            {
+                tiles[i][j] = TileType.OutsideMap;
+            }
         }
     }
 
@@ -84,7 +147,7 @@ public class BoardCreator : MonoBehaviour
     void CreateRoomsAndCorridors()
     {
         // Create the rooms array with a random size.
-        rooms = new Room[numRooms.Random];
+        rooms = new Room[gParams.numRooms.Random];
 
         // There should be one less corridor than there is rooms.
         corridors = new Corridor[rooms.Length - 1];
@@ -94,137 +157,199 @@ public class BoardCreator : MonoBehaviour
         corridors[0] = new Corridor();
 
         // Setup the first room, there is no previous corridor so we do not use one.
-        rooms[0].SetupRoom(roomWidth, roomHeight, columns, rows);
+        rooms[0].SetupRoom(gParams);//roomWidth, roomHeight, columns, rows);
+        rooms[0].enteringCorridorInstance = null;
+        rooms[0].exitingCorridorInstance = corridors[0];
 
         // Setup the first corridor using the first room.
-        corridors[0].SetupCorridor(rooms[0], corridorLength, roomWidth, roomHeight, columns, rows, true);
+        corridors[0].SetupCorridor(gParams, rooms[0], true);
 
         for (int i = 1; i < rooms.Length; i++)
         {
             // Create a room.
             rooms[i] = new Room();
+            rooms[i].enteringCorridorInstance = corridors[i - 1];
 
             // Setup the room based on the previous corridor.
-            rooms[i].SetupRoom(roomWidth, roomHeight, columns, rows, corridors[i - 1]);
+            rooms[i].SetupRoom(gParams, corridors[i - 1]);
 
             // If we haven't reached the end of the corridors array...
             if (i < corridors.Length)
             {
                 // ... create a corridor.
                 corridors[i] = new Corridor();
+                rooms[i].exitingCorridorInstance = corridors[i];
 
                 // Setup the corridor based on the room that was just created.
-                corridors[i].SetupCorridor(rooms[i], corridorLength, roomWidth, roomHeight, columns, rows, false);
+                corridors[i].SetupCorridor(gParams, rooms[i], false);
+            }
+            else
+            {
+                rooms[i].exitingCorridorInstance = null;
             }
 
             if (i == rooms.Length - 1)
             {
-                player.transform.position = new Vector3(rooms[i].xPos, rooms[i].yPos, 0);
+                // Pick a random bit of the room to spawn in
+                int x = UnityEngine.Random.Range(1, rooms[i].roomWidth - 1) + rooms[i].xPos;
+                int y = UnityEngine.Random.Range(1, rooms[i].roomHeight - 1) + rooms[i].yPos;
+                player.transform.position = new Vector2(x, y);
             }
         }
 
     }
 
-
-    void SetTilesValuesForRooms()
+    void WriteTile(int x, int y, TileType type, bool overrideCurrent=false)
     {
-        // Go through all the rooms...
-        for (int i = 0; i < rooms.Length; i++)
+        if (tiles[x][y] == TileType.OutsideMap || overrideCurrent)
         {
-            Room currentRoom = rooms[i];
-
-            // ... and for each room go through it's width.
-            for (int j = 0; j < currentRoom.roomWidth; j++)
-            {
-                int xCoord = currentRoom.xPos + j;
-
-                // For each horizontal tile, go up vertically through the room's height.
-                for (int k = 0; k < currentRoom.roomHeight; k++)
-                {
-                    int yCoord = currentRoom.yPos + k;
-
-                    TileType type;
-                    // The coordinates in the jagged array are based on the room's position and it's width and height.
-                    if (j == 0 || k == 0 || j == currentRoom.roomWidth - 1 || k == currentRoom.roomHeight - 1)
-                    {
-                        type = TileType.Wall;
-                    }
-                    else
-                    {
-                        type = TileType.Floor;
-                    }
-                    tiles[xCoord][yCoord] = type;
-                }
-            }
+            tiles[x][y] = type;
         }
     }
 
-
-    void SetTilesValuesForCorridors()
+    void SetTileValuesForFloors()
     {
         // Go through every corridor...
-        for (int i = 0; i < corridors.Length; i++)
+        foreach(Corridor corridor in corridors)
         {
-            Corridor currentCorridor = corridors[i];
+            Vector2Int start = corridor.StartPosition;
+            Vector2Int direction = corridor.DirectionVector;
 
             // and go through it's length.
-            for (int j = 0; j < currentCorridor.corridorLength; j++)
+            for (int j = 0; j < corridor.corridorLength; j++)
             {
                 // Start the coordinates at the start of the corridor.
-                int xCoord = currentCorridor.startXPos;
-                int yCoord = currentCorridor.startYPos;
+                Vector2Int tile = start + direction * j;
+                WriteTile(tile.x, tile.y, TileType.Floor);
+            }
+        }
 
-                // Depending on the direction, add or subtract from the appropriate
-                // coordinate based on how far through the length the loop is.
-                switch (currentCorridor.direction)
+        // Go through every room
+        foreach(Room room in rooms)
+        {
+            Vector2Int start = room.RoomStart;
+            Vector2Int size = room.RoomSize;
+
+            for(int x = start.x; x < start.x + size.x; x++)
+            {
+                for(int y = start.y; y < start.y + size.y; y++)
                 {
-                    case Direction.North:
-                        yCoord += j;
-                        break;
-                    case Direction.East:
-                        xCoord += j;
-                        break;
-                    case Direction.South:
-                        yCoord -= j;
-                        break;
-                    case Direction.West:
-                        xCoord -= j;
-                        break;
+                    WriteTile(x, y, TileType.Floor);
                 }
-
-                // Set the tile at these coordinates to Floor.
-                tiles[xCoord][yCoord] = TileType.Floor;
             }
         }
     }
 
-    TileType[] GetTileNeighbours(int x, int y)
+    void SetTileValuesForWalls()
     {
-        TileType[] neighbours = new TileType[4];
+        for(int x = 0; x < gParams.columns; x++)
+        {
+            for(int y = 0; y < gParams.rows; y++)
+            {
+                TileType type = tiles[x][y];
+                TileType[] neighbours = GetNeighbours(x, y);
+                bool isSurroundingFloor = Array.IndexOf(neighbours, TileType.Floor) >= 0;
+                bool isEdge = x == 0 || y == 0 || x == gParams.columns - 1 || y == gParams.rows - 1;
+                if ((type == TileType.OutsideMap || isEdge) && isSurroundingFloor)
+                {
+                    WriteTile(x, y, TileType.Wall, overrideCurrent: true);
+                }
+            }
+        }
+    }
 
-        neighbours[West] = x == 0 ? 
-            TileType.OutsideMap: 
-            tiles[x - 1][y];
+    void RemoveLooseWalls()
+    {
+        for(int x = 0; x < gParams.columns; x++)
+        {
+            for(int y = 0; y < gParams.rows; y++)
+            {
+                TileType type = tiles[x][y];
+                TileType[] neighbours = GetNeighbours(x, y);
+                if(type == TileType.Wall && Array.IndexOf(neighbours, TileType.OutsideMap) < 0)
+                {
+                    WriteTile(x, y, TileType.Floor, overrideCurrent: true);
+                }
+            }
+        }
+    }
 
-        neighbours[East] = x == columns - 1 ? 
-            TileType.OutsideMap: 
-            tiles[x + 1][y];
+    TileType GetNeighbour(int x, int y, int direction)
+    {
+        switch (direction)
+        {
+            case North:
+                return y == gParams.rows - 1 ? TileType.OutsideMap : tiles[x][y + 1];
 
-        neighbours[North] = y == 0 ? 
-            TileType.OutsideMap: 
-            tiles[x][y - 1];
+            case South:
+                return y == 0 ? TileType.OutsideMap : tiles[x][y - 1];
 
-        neighbours[South] = y == rows - 1 ?
-            TileType.OutsideMap :
-            tiles[x][y + 1];
+            case East:
+                return x == gParams.columns - 1 ? TileType.OutsideMap : tiles[x + 1][y];
+
+            case West:
+                return x == 0 ? TileType.OutsideMap : tiles[x - 1][y];
+
+            case NorthWest:
+                return x == 0 || y == gParams.rows - 1 ? TileType.OutsideMap : tiles[x - 1][y + 1];
+
+            case NorthEast:
+                return x == gParams.columns - 1 || y == gParams.rows - 1 ? TileType.OutsideMap : tiles[x + 1][y + 1];
+
+            case SouthWest:
+                return x == 0 || y == 0 ? TileType.OutsideMap : tiles[x - 1][y - 1];
+
+            case SouthEast:
+                return x == gParams.columns - 1 || y == 0 ? TileType.OutsideMap : tiles[x + 1][y - 1];
+
+            default:
+                return TileType.OutsideMap;
+        }
+    }
+
+    TileType[] GetNeighbours(int x, int y)
+    {
+        TileType[] neighbours = new TileType[8];
+
+        neighbours[West] = GetNeighbour(x, y, West);
+        neighbours[East] = GetNeighbour(x, y, East);
+        neighbours[North] = GetNeighbour(x, y, North);
+        neighbours[South] = GetNeighbour(x, y, South);
+        neighbours[NorthWest] = GetNeighbour(x, y, NorthWest);
+        neighbours[NorthEast] = GetNeighbour(x, y, NorthEast);
+        neighbours[SouthWest] = GetNeighbour(x, y, SouthWest);
+        neighbours[SouthEast] = GetNeighbour(x, y, SouthEast);
 
         return neighbours;
     }
 
-    int GetCount(TileType[] tiles, TileType type)
+    int GetCount(TileType[] tiles, TileType type, TileCountDirections directions)
     {
+        int start;
+        int stop;
+
+        switch(directions)
+        {
+            case TileCountDirections.Adjacent:
+                start = North;
+                stop = West;
+                break;
+
+            case TileCountDirections.Diagonal:
+                start = NorthWest;
+                stop = SouthEast;
+                break;
+
+            default:
+            case TileCountDirections.Both:
+                start = North;
+                stop = SouthEast;
+                break;
+
+        }
+
         int count = 0;
-        for(int i = 0; i < tiles.Length; i++)
+        for(int i = start; i <= stop; i++)
         {
             if(tiles[i] == type)
             {
@@ -232,6 +357,150 @@ public class BoardCreator : MonoBehaviour
             }
         }
         return count;
+    }
+
+    void InstantiateWall0(int i, int j, TileType[] neighbours)
+    {
+        // No wall neighbours so just instantiate the wall0
+        InstantiateFromArray(tilePrefabs.Wall0, i, j, Quaternion.identity);
+    }
+
+    void InstantiateWall1(int i, int j, TileType[] neighbours)
+    {
+        // Need to find which direction the neighbouring wall tile is in
+        Quaternion rotation;
+
+        switch(Array.IndexOf(neighbours, TileType.Wall))
+        {
+            default:
+            case North:
+                rotation = Quaternion.Euler(0, 0, 180);
+                break;
+
+            case South:
+                rotation = Quaternion.Euler(0, 0, 0);
+                break;
+
+            case East:
+                rotation = Quaternion.Euler(0, 0, 90);
+                break;
+
+            case West:
+                rotation = Quaternion.Euler(0, 0, -90);
+                break;
+        }
+
+        InstantiateFromArray(tilePrefabs.Wall1, i, j, rotation);
+    }
+
+    void InstantiateWall2(int i, int j, TileType[] neighbours)
+    {
+        Quaternion rotation;
+        GameObject[] tiles;
+
+        if(neighbours[North] == TileType.Wall && neighbours[South] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, 0);
+            tiles = tilePrefabs.Wall2;
+        }
+        else if(neighbours[East] == TileType.Wall && neighbours[West] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, 90);
+            tiles = tilePrefabs.Wall2;
+        }
+        else if(neighbours[North] == TileType.Wall && neighbours[East] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, 180);
+            tiles = neighbours[NorthEast] == TileType.Wall ?
+                tilePrefabs.Wall2AdjacentNoCorner :
+                tilePrefabs.Wall2Adjacent;
+        }
+        else if(neighbours[North] == TileType.Wall && neighbours[West] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, -90);
+            tiles = neighbours[NorthWest] == TileType.Wall ?
+                tilePrefabs.Wall2AdjacentNoCorner:
+                tilePrefabs.Wall2Adjacent;
+        }
+        else if(neighbours[South] == TileType.Wall && neighbours[East] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, 90);
+            tiles = neighbours[SouthEast] == TileType.Wall ?
+                tilePrefabs.Wall2AdjacentNoCorner :
+                tilePrefabs.Wall2Adjacent;
+        }
+        else if(neighbours[South] == TileType.Wall && neighbours[West] == TileType.Wall)
+        {
+            rotation = Quaternion.Euler(0, 0, 0);
+            tiles = neighbours[SouthWest] == TileType.Wall ?
+                tilePrefabs.Wall2AdjacentNoCorner:
+                tilePrefabs.Wall2Adjacent;
+        }
+        else
+        {
+            // Invalid
+            rotation = Quaternion.identity;
+            tiles = tilePrefabs.Invalid;
+        }
+
+        InstantiateFromArray(tiles, i, j, rotation);
+    }
+
+    GameObject[] SelectWall3Sprite(TileType farLeft, TileType farRight)
+    {
+        if(farLeft == TileType.Wall && farRight == TileType.Wall)
+        {
+            return tilePrefabs.Wall3NoCornerSWSE;
+        }
+        else if(farLeft == TileType.Wall)
+        {
+            return tilePrefabs.Wall3NoCornerSW;
+        }
+        else if(farRight == TileType.Wall)
+        {
+            return tilePrefabs.Wall3NoCornerSE;
+        }
+        else
+        {
+            return tilePrefabs.Wall3;
+        }
+    }
+
+    void InstantiateWall3(int i, int j, TileType[] neighbours)
+    {
+        Quaternion rotation;
+        GameObject[] tiles;
+
+        switch (Array.FindIndex(neighbours, n => n != TileType.Wall))
+        {
+            default:
+            case North:
+                tiles = SelectWall3Sprite(neighbours[SouthWest], neighbours[SouthEast]);
+                rotation = Quaternion.Euler(0, 0, 0);
+                break;
+
+            case South:
+                tiles = SelectWall3Sprite(neighbours[NorthEast], neighbours[NorthWest]);
+                rotation = Quaternion.Euler(0, 0, 180);
+                break;
+
+            case East:
+                tiles = SelectWall3Sprite(neighbours[NorthWest], neighbours[SouthWest]);
+                rotation = Quaternion.Euler(0, 0, -90);
+                break;
+
+            case West:
+                tiles = SelectWall3Sprite(neighbours[SouthEast], neighbours[NorthEast]);
+                rotation = Quaternion.Euler(0, 0, 90);
+                break;
+        }
+
+        InstantiateFromArray(tiles, i, j, rotation);
+    }
+
+    void InstantiateWall4(int i, int j, TileType[] neighbours)
+    {
+        InstantiateFromArray(tilePrefabs.Wall4, i, j, Quaternion.identity);
     }
 
     void InstantiateTiles()
@@ -249,34 +518,34 @@ public class BoardCreator : MonoBehaviour
 
                     case TileType.Floor:
                         // ... and instantiate a floor tile for it.
-                        InstantiateFromArray(floorTiles, i, j);
+                        InstantiateFromArray(tilePrefabs.Floor, i, j, Quaternion.identity);
                         break;
 
                     case TileType.Outside:
                         break;
 
                     case TileType.Wall:
-                        TileType[] neighbours = GetTileNeighbours(i, j);
-                        switch(GetCount(neighbours, TileType.Wall))
+                        TileType[] neighbours = GetNeighbours(i, j);
+                        switch(GetCount(neighbours, TileType.Wall, TileCountDirections.Adjacent))
                         {
                             case 0:
-                                InstantiateFromArray(wall0Tiles, i, j);
+                                InstantiateWall0(i, j, neighbours);
                                 break;
 
                             case 1:
-                                InstantiateFromArray(wall1Tiles, i, j);
+                                InstantiateWall1(i, j, neighbours);
                                 break;
 
                             case 2:
-                                InstantiateFromArray(wall2Tiles, i, j);
+                                InstantiateWall2(i, j, neighbours);
                                 break;
 
                             case 3:
-                                InstantiateFromArray(wall3Tiles, i, j);
+                                InstantiateWall3(i, j, neighbours);
                                 break;
 
                             case 4:
-                                InstantiateFromArray(wall4Tiles, i, j);
+                                InstantiateWall4(i, j, neighbours);
                                 break;
                         }
                         break;
@@ -285,67 +554,17 @@ public class BoardCreator : MonoBehaviour
         }
     }
 
-
-    void InstantiateOuterWalls()
-    {
-        // The outer walls are one unit left, right, up and down from the board.
-        float leftEdgeX = -1f;
-        float rightEdgeX = columns + 0f;
-        float bottomEdgeY = -1f;
-        float topEdgeY = rows + 0f;
-
-        // Instantiate both vertical walls (one on each side).
-        InstantiateVerticalOuterWall(leftEdgeX, bottomEdgeY, topEdgeY);
-        InstantiateVerticalOuterWall(rightEdgeX, bottomEdgeY, topEdgeY);
-
-        // Instantiate both horizontal walls, these are one in left and right from the outer walls.
-        InstantiateHorizontalOuterWall(leftEdgeX + 1f, rightEdgeX - 1f, bottomEdgeY);
-        InstantiateHorizontalOuterWall(leftEdgeX + 1f, rightEdgeX - 1f, topEdgeY);
-    }
-
-
-    void InstantiateVerticalOuterWall(float xCoord, float startingY, float endingY)
-    {
-        // Start the loop at the starting value for Y.
-        float currentY = startingY;
-
-        // While the value for Y is less than the end value...
-        while (currentY <= endingY)
-        {
-            // ... instantiate an outer wall tile at the x coordinate and the current y coordinate.
-            InstantiateFromArray(outerWallTiles, xCoord, currentY);
-
-            currentY++;
-        }
-    }
-
-
-    void InstantiateHorizontalOuterWall(float startingX, float endingX, float yCoord)
-    {
-        // Start the loop at the starting value for X.
-        float currentX = startingX;
-
-        // While the value for X is less than the end value...
-        while (currentX <= endingX)
-        {
-            // ... instantiate an outer wall tile at the y coordinate and the current x coordinate.
-            InstantiateFromArray(outerWallTiles, currentX, yCoord);
-
-            currentX++;
-        }
-    }
-
-
-    void InstantiateFromArray(GameObject[] prefabs, float xCoord, float yCoord)
+    void InstantiateFromArray(GameObject[] prefabs, float xCoord, float yCoord, Quaternion rotation)
     {
         // Create a random index for the array.
-        int randomIndex = Random.Range(0, prefabs.Length);
+        int randomIndex = UnityEngine.Random.Range(0, prefabs.Length);
 
         // The position to be instantiated at is based on the coordinates.
         Vector3 position = new Vector3(xCoord, yCoord, 0f);
 
         // Create an instance of the prefab from the random index of the array.
-        GameObject tileInstance = Instantiate(prefabs[randomIndex], position, Quaternion.identity) as GameObject;
+        GameObject tileInstance = Instantiate(prefabs[randomIndex], position, rotation) as GameObject;
+        tileInstance.layer = LayerMask.NameToLayer("World");
 
         // Set the tile's parent to the board holder.
         tileInstance.transform.parent = boardHolder.transform;

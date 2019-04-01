@@ -40,8 +40,95 @@ public class Corridor
         }
     }
 
+    public Vector2Int StartPosition
+    {
+        get
+        {
+            return new Vector2Int(startXPos, startYPos);
+        }
+    }
 
-    public void SetupCorridor(Room room, IntRange length, IntRange roomWidth, IntRange roomHeight, int columns, int rows, bool firstCorridor)
+    public Vector2Int EndPosition
+    {
+        get
+        {
+            return new Vector2Int(EndPositionX, EndPositionY);
+        }
+    }
+
+    public Vector2Int DirectionVector
+    {
+        get
+        {
+            switch(direction)
+            {
+                case Direction.East:
+                    return new Vector2Int(1, 0);
+
+                case Direction.North:
+                    return new Vector2Int(0, 1);
+
+                case Direction.South:
+                    return new Vector2Int(0, -1);
+
+                case Direction.West:
+                    return new Vector2Int(-1, 0);
+
+                default:
+                    return Vector2Int.zero;
+            }
+        }
+    }
+
+    public Vector2Int WallOffsetLeft
+    {
+        get
+        {
+            switch (direction)
+            {
+                case Direction.East:
+                    return new Vector2Int(0, 1);
+
+                case Direction.North:
+                    return new Vector2Int(-1, 0);
+
+                case Direction.South:
+                    return new Vector2Int(1, 0);
+
+                case Direction.West:
+                    return new Vector2Int(0, -1);
+
+                default:
+                    return Vector2Int.zero;
+            }
+        }
+    }
+
+    public Vector2Int WallOffsetRight
+    {
+        get
+        {
+            switch (direction)
+            {
+                case Direction.East:
+                    return new Vector2Int(0, -1);
+
+                case Direction.North:
+                    return new Vector2Int(1, 0);
+
+                case Direction.South:
+                    return new Vector2Int(-1, 0);
+
+                case Direction.West:
+                    return new Vector2Int(0, 1);
+
+                default:
+                    return Vector2Int.zero;
+            }
+        }
+    }
+
+    public void SetupCorridor(GenerationParams gParams, Room room, bool firstCorridor)
     {
         // Set a random direction (a random index from 0 to 3, cast to Direction).
         direction = (Direction)Random.Range(0, 4);
@@ -67,10 +154,10 @@ public class Corridor
         }
 
         // Set a random length.
-        corridorLength = length.Random;
+        corridorLength = gParams.corridorLength.Random;
 
         // Create a cap for how long the length can be (this will be changed based on the direction and position).
-        int maxLength = length.m_Max;
+        int maxLength = gParams.corridorLength.m_Max;
 
         switch (direction)
         {
@@ -83,22 +170,22 @@ public class Corridor
                 startYPos = room.yPos + room.roomHeight;
 
                 // The maximum length the corridor can be is the height of the board (rows) but from the top of the room (y pos + height).
-                maxLength = rows - startYPos - roomHeight.m_Min;
+                maxLength = gParams.rows - startYPos - gParams.roomHeight.m_Min;
                 break;
             case Direction.East:
                 startXPos = room.xPos + room.roomWidth;
                 startYPos = Random.Range(room.yPos, room.yPos + room.roomHeight - 1);
-                maxLength = columns - startXPos - roomWidth.m_Min;
+                maxLength = gParams.columns - startXPos - gParams.roomWidth.m_Min;
                 break;
             case Direction.South:
                 startXPos = Random.Range(room.xPos, room.xPos + room.roomWidth);
                 startYPos = room.yPos;
-                maxLength = startYPos - roomHeight.m_Min;
+                maxLength = startYPos - gParams.roomHeight.m_Min;
                 break;
             case Direction.West:
                 startXPos = room.xPos;
                 startYPos = Random.Range(room.yPos, room.yPos + room.roomHeight);
-                maxLength = startXPos - roomWidth.m_Min;
+                maxLength = startXPos - gParams.roomWidth.m_Min;
                 break;
         }
 

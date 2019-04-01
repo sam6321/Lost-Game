@@ -7,60 +7,30 @@ public class Player : MonoBehaviour
     [SerializeField]
     private float speed = 10;
 
-    private BoxCollider2D collider;
-    private Rigidbody2D characterRigidBody;
+    private Animator playerAnimator;
+    private Rigidbody2D playerRigidBody;
     private List<ContactPoint2D> contacts = new List<ContactPoint2D>();
+    private Vector2 direction = new Vector2();
+
+    private int walkParameter;
 
     void Start()
     {
-        collider = GetComponent<BoxCollider2D>();
-        characterRigidBody = GetComponent<Rigidbody2D>();
+        playerRigidBody = GetComponent<Rigidbody2D>();
+        playerAnimator = GetComponent<Animator>();
     }
 
     void Update()
     {
-        UnpenetrateContacts();
-    }
+        direction.Set(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+        direction.Normalize();
 
+        playerAnimator.SetBool("walking", direction.sqrMagnitude > 0.0f);
+    }
 
     // Update is called once per frame
     void FixedUpdate()
     {
-        Vector2 direction = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical")).normalized;
-        characterRigidBody.velocity = direction * speed * Time.fixedDeltaTime;
-    }
-
-    void UnpenetrateContacts()
-    {
-        contacts.Clear();
-        Vector2 movement = new Vector2(0, 0);
-        characterRigidBody.GetContacts(contacts);
-        foreach (ContactPoint2D contact in contacts)
-        {
-            bool hasMovedX = movement.x != 0;
-            bool hasMovedY = movement.y != 0;
-
-            if (hasMovedX && contact.normal.x != 0)
-            {
-                movement.x = contact.normal.x; ;
-            }
-
-            if (hasMovedY && contact.normal.y != 0)
-            {
-                movement.y = contact.normal.y;
-            }
-
-            if (hasMovedX && hasMovedY)
-            {
-                break;
-            }
-        }
-
-        if(movement.sqrMagnitude > 0)
-        {
-            Debug.Log("Moving");
-        }
-
-        characterRigidBody.position += movement;
+        playerRigidBody.velocity = direction * speed * Time.fixedDeltaTime;
     }
 }
