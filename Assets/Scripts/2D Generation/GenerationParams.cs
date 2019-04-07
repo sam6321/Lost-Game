@@ -5,6 +5,7 @@ public class GenerationParams
 {
     public int columns = 100;                                 // The number of columns on the board (how wide it will be).
     public int rows = 100;                                    // The number of rows on the board (how tall it will be).
+    public int numEnemies = 1;                               // Number of enemies to spawn 
     public IntRange numRooms = new IntRange(15, 20);         // The range of the number of rooms there can be.
     public IntRange roomWidth = new IntRange(3, 10);         // The range of widths rooms can have.
     public IntRange roomHeight = new IntRange(3, 10);        // The range of heights rooms can have.

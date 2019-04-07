@@ -20,4 +20,5 @@ struct TilePrefabs
     public GameObject[] Wall4NoCornerSE;
     public GameObject[] Wall4NoCornerSWSE;
     public GameObject[] Wall4NoCornerNWSE;
+    public GameObject[] Exit;
 }

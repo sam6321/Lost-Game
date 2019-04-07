@@ -27,6 +27,19 @@ public class Room
         }
     }
 
+    public Vector2Int RandomPositionInside
+    {
+        get
+        {
+            Vector2Int start = RoomStart;
+            Vector2Int end = start + RoomSize;
+            return new Vector2Int(
+                Random.Range(start.x, end.x),
+                Random.Range(start.y, end.y)
+            );
+        }
+    }
+
 
     // This is used for the first room.  It does not have a Corridor parameter since there are no corridors yet.
     public void SetupRoom(GenerationParams gParams)

@@ -10,7 +10,8 @@ public class BoardCreator : MonoBehaviour
         Outside,
         OutsideMap,
         Wall,
-        Floor
+        Floor,
+        Exit
     }
 
     private enum TileCountDirections
@@ -35,12 +36,17 @@ public class BoardCreator : MonoBehaviour
     // The open parts of wall3 point south, west, and east
     // Wall 4s don't need to be rotated as they point in all directions
 
-   
+    [SerializeField]
+    private GameObject gameCompletion;
+
     [SerializeField]
     private GameObject player;
 
     [SerializeField]
-    private GameObject enemy;
+    private GameObject enemyPrefab;
+    private RemainingUI remainingUI;
+    private int enemiesRemaining = 0;
+    private Exit exit;
 
     [SerializeField]
     private AstarPath path;
@@ -49,7 +55,11 @@ public class BoardCreator : MonoBehaviour
     private bool removeLooseWalls;
 
     [SerializeField]
-    private GenerationParams gParams;
+    private GenerationParams[] levelGenerationParams;
+    private GenerationParams gParams; // current generation params
+    private int nextLevel = 0;
+    private float perlinStartX = 0;
+    private float perlinStartY = 0;
 
     [SerializeField]
     private TilePrefabs tilePrefabs;
@@ -61,8 +71,24 @@ public class BoardCreator : MonoBehaviour
 
     private void Start()
     {
+        remainingUI = GameObject.Find("EnemiesRemaining").GetComponent<RemainingUI>();
         // Create the board holder.
+        CreateLevel();
+    }
+    
+    public void CreateLevel(bool playerDied=false)
+    {
+        DestroyLevel();
         boardHolder = new GameObject("BoardHolder");
+
+        if(!ChooseGenerationParams(playerDied))
+        {
+            // Player has completed all levels!
+            GameComplete();
+            return;
+        }
+        perlinStartX = UnityEngine.Random.Range(-1000, 1000) / 2000f;
+        perlinStartY = UnityEngine.Random.Range(-1000, 1000) / 2000f;
 
         SetupTilesArray();
 
@@ -71,25 +97,89 @@ public class BoardCreator : MonoBehaviour
         SetTileValuesForFloors();
         SetTileValuesForWalls();
 
-        if(removeLooseWalls)
+        if (removeLooseWalls)
         {
             RemoveLooseWalls();
         }
 
+        SelectEntitySpawns();
+
         InstantiateTiles();
         ConfigureGraph();
-        SelectEnemySpawnRoom();
     }
 
-    void SelectEnemySpawnRoom()
+    public void DestroyLevel()
     {
-        int index = UnityEngine.Random.Range(0, rooms.Length - 1);
-        Room room = rooms[index];
-        Vector2Int start = room.RoomStart;
-        Vector2Int size = room.RoomSize;
-        enemy.transform.position = new Vector2(start.x + size.x / 2.0f, start.y + size.y / 2.0f);
+        if(boardHolder != null)
+        {
+            Destroy(boardHolder);
+            boardHolder = null;
+        }
+    }
 
-        enemy.GetComponent<Seeker>().StartPath(enemy.transform.position, player.transform.position);
+    public void OnEnemyKilled()
+    {
+        enemiesRemaining--;
+        remainingUI.SetCount(enemiesRemaining);
+        if (enemiesRemaining <= 0)
+        {
+            exit.canExit = true;
+        }
+    }
+
+    bool ChooseGenerationParams(bool playerDied)
+    {
+        if(playerDied)
+        {
+            nextLevel--;
+        }
+
+        if(nextLevel == levelGenerationParams.Length)
+        {
+            return false; // No more levels to play
+        }
+
+        gParams = levelGenerationParams[nextLevel];
+        nextLevel++;
+        return true;
+    }
+
+    void GameComplete()
+    {
+        // Show a message saying NICE WORK
+        gameCompletion.SetActive(true);
+        Destroy(boardHolder);
+    }
+
+    public void GameCompleteOnClick()
+    {
+        Application.Quit();
+    }
+
+    Room SelectRandomRoom()
+    {
+        return rooms[UnityEngine.Random.Range(0, rooms.Length - 1)];
+    }
+
+    void SelectEntitySpawns()
+    {
+        // Spawn the exit in the first room
+        Vector2Int position = rooms[0].RandomPositionInside;
+        tiles[position.x][position.y] = TileType.Exit;
+
+        // Spawn enemies in random rooms
+        for(int i = 0; i < gParams.numEnemies; i++)
+        {
+            Room room = SelectRandomRoom();
+            position = room.RandomPositionInside;
+            Instantiate(enemyPrefab, (Vector2)position, Quaternion.identity, boardHolder.transform);
+        }
+        enemiesRemaining = gParams.numEnemies;
+        remainingUI.SetCount(enemiesRemaining);
+
+        // Spawn the player in the last room
+        player.transform.position = (Vector2)rooms[rooms.Length - 1].RandomPositionInside;
+        player.GetComponent<PlayerMovement>().enabled = true;
     }
 
     void ConfigureGraph()
@@ -187,16 +277,7 @@ public class BoardCreator : MonoBehaviour
             {
                 rooms[i].exitingCorridorInstance = null;
             }
-
-            if (i == rooms.Length - 1)
-            {
-                // Pick a random bit of the room to spawn in
-                int x = UnityEngine.Random.Range(1, rooms[i].roomWidth - 1) + rooms[i].xPos;
-                int y = UnityEngine.Random.Range(1, rooms[i].roomHeight - 1) + rooms[i].yPos;
-                player.transform.position = new Vector2(x, y);
-            }
         }
-
     }
 
     void WriteTile(int x, int y, TileType type, bool overrideCurrent=false)
@@ -516,6 +597,12 @@ public class BoardCreator : MonoBehaviour
                     case TileType.OutsideMap:
                         break;
 
+                    case TileType.Exit:
+                        GameObject exitTile = InstantiateFromArray(tilePrefabs.Exit, i, j, Quaternion.identity);
+                        exit = exitTile.GetComponent<Exit>();
+                        exit.canExit = false;
+                        break;
+
                     case TileType.Floor:
                         // ... and instantiate a floor tile for it.
                         InstantiateFromArray(tilePrefabs.Floor, i, j, Quaternion.identity);
@@ -554,10 +641,11 @@ public class BoardCreator : MonoBehaviour
         }
     }
 
-    void InstantiateFromArray(GameObject[] prefabs, float xCoord, float yCoord, Quaternion rotation)
+    GameObject InstantiateFromArray(GameObject[] prefabs, float xCoord, float yCoord, Quaternion rotation)
     {
         // Create a random index for the array.
-        int randomIndex = UnityEngine.Random.Range(0, prefabs.Length);
+        float perlin = Mathf.PerlinNoise((perlinStartX + xCoord / 100f) * 10f, (perlinStartY + yCoord / 100f) * 10f);
+        int randomIndex = Mathf.RoundToInt(Mathf.Clamp(perlin, 0.0f, 1.0f) * (prefabs.Length - 1));
 
         // The position to be instantiated at is based on the coordinates.
         Vector3 position = new Vector3(xCoord, yCoord, 0f);
@@ -568,5 +656,7 @@ public class BoardCreator : MonoBehaviour
 
         // Set the tile's parent to the board holder.
         tileInstance.transform.parent = boardHolder.transform;
+
+        return tileInstance;
     }
 }
